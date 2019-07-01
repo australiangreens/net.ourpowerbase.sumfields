@@ -1,6 +1,14 @@
 <?php
 
 require_once 'sumfields.civix.php';
+use CRM_Sumfields_ExtensionUtil as E;
+
+/**
+ * Implementation of hook_civicrm_alterSettingsFolders
+ */
+function sumfields_civicrm_alterSettingsFolders(&$metaDataFolders = NULL) {
+  _sumfields_civix_civicrm_alterSettingsFolders($metaDataFolders);
+}
 
 /**
  * Implementation of hook_civicrm_config
@@ -26,7 +34,7 @@ function sumfields_civicrm_xmlMenu(&$files) {
 function sumfields_civicrm_navigationMenu(&$menu) {
   $path = "Administer/Customize Data and Screens";
   _sumfields_civix_insert_navigation_menu($menu, $path, array(
-    'label' => ts('Summary Fields', array('net.ourpowerbase.sumfields')),
+    'label' => E::ts('Summary Fields'),
     'name' => 'Summary Fields',
     'url' => 'civicrm/admin/setting/sumfields',
     'permission' => 'administer CiviCRM',
@@ -47,31 +55,40 @@ function sumfields_civicrm_install() {
  * Implementation of hook_civicrm_uninstall
  */
 function sumfields_civicrm_uninstall() {
+  sumfields_deinitialize_custom_data();
+  sumfields_delete_user_settings();
   return _sumfields_civix_civicrm_uninstall();
+}
+
+/**
+ * Impelmentation of hook_civicrm_postInstall
+ */
+function sumfields_civicrm_postInstall() {
+  sumfields_initialize_user_settings();
+  $session = CRM_Core_Session::singleton();
+  if(!sumfields_create_custom_fields_and_table()) {
+    $msg = E::ts("Failed to create custom fields and table. Maybe they already exist?");
+    $session->setStatus($msg);
+  }
+  $msg = E::ts("The extension is enabled. Please go to Adminster -> Customize Data and Screens -> Summary Fields to configure it.");
+  $session->setStatus($msg);
+
+  return _sumfields_civix_civicrm_postInstall();
 }
 
 /**
  * Implementation of hook_civicrm_enable
  */
 function sumfields_civicrm_enable() {
-  sumfields_initialize_user_settings();
-  $session = CRM_Core_Session::singleton();
-  if(!sumfields_create_custom_fields_and_table()) {
-    $msg = ts("Failed to create custom fields and table. Maybe they already exist?", array('domain' => 'net.ourpowerbase.sumfields'));
-    $session->setStatus($msg);
-  }
-  $msg = ts("The extension is enabled. Please go to Adminster -> Customize Data and Screens -> Summary Fields to configure it.", array('domain' => 'net.ourpowerbase.sumfields'));
-  $session->setStatus($msg);
-
-  return _sumfields_civix_civicrm_enable();
+  sumfields_reenable_custom_group();
+  _sumfields_civix_civicrm_enable();
 }
 
 /**
  * Implementation of hook_civicrm_disable
  */
 function sumfields_civicrm_disable() {
-  sumfields_deinitialize_custom_data();
-  sumfields_delete_user_settings();
+  sumfields_disable_custom_group();
   return _sumfields_civix_civicrm_disable();
 }
 
@@ -109,11 +126,43 @@ function sumfields_civicrm_pageRun($page) {
       'markup' => '
       <a class="no-popup button" href="' . CRM_Utils_System::url('civicrm/admin/setting/sumfields') . '">
         <span>
-          <i class="crm-i fa-wrench"></i>&nbsp; ' . ts('Configure Summary Fields', array('domain' => 'net.ourpowerbase.sumfields')) . '
+          <i class="crm-i fa-wrench"></i>&nbsp; ' . E::ts('Configure Summary Fields') . '
         </span>
       </a>
     ',
     ));
+  }
+}
+
+/**
+ * Force all values to be integers.
+ *
+ * This function is called in array_walk when rewriting sql statements
+ * to ensure that all values put into "IN (1,2,3)" style clauses are
+ * in fact integers.
+ */
+function sumfields_force_integer(&$value, $key) {
+  if (!is_numeric($value)) {
+    $session = CRM_Core_Session::singleton();
+    $session->setStatus(E::ts("Failed to properly validate one of your options. Be sure to use integer values for all options."));
+  }
+
+  // is_numeric is not perfect, it will allow 4.2 and 0x539, etc.
+  // To be safe, we really want an integer.
+  $value = intval($value);
+}
+
+/**
+ * Force all values to be dates in YYYY-MM-DD format..
+ *
+ * This function is called in array_walk when rewriting sql statements
+ * to ensure that all date values are really date values..
+ */
+function sumfields_force_date(&$value, $key) {
+  if (!preg_match('/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/', $value)) {
+    $session = CRM_Core_Session::singleton();
+    $session->setStatus(E::ts("Failed to properly validate the date @date.", array('@date' => $value)));
+    $value = '9999-99-99';
   }
 }
 
@@ -131,6 +180,7 @@ function sumfields_sql_rewrite($sql) {
   if(count($ids) == 0) {
     $ids = array_keys(sumfields_get_all_financial_types());
   }
+  array_walk($ids, 'sumfields_force_integer');
   $str_ids = implode(',', $ids);
   $sql = str_replace('%financial_type_ids', $str_ids, $sql);
 
@@ -139,6 +189,7 @@ function sumfields_sql_rewrite($sql) {
     // Surely this is wrong... but better to avoid a sql error
     $ids = array_keys(sumfields_get_all_financial_types());
   }
+  array_walk($ids, 'sumfields_force_integer');
   $str_ids = implode(',', $ids);
   $sql = str_replace('%membership_financial_type_ids', $str_ids, $sql);
 
@@ -146,6 +197,7 @@ function sumfields_sql_rewrite($sql) {
   if(count($ids) == 0) {
     $ids = array_keys(sumfields_get_all_participant_status_types());
   }
+  array_walk($ids, 'sumfields_force_integer');
   $str_ids = implode(',', $ids);
   $sql = str_replace('%participant_status_ids', $str_ids, $sql);
 
@@ -153,6 +205,7 @@ function sumfields_sql_rewrite($sql) {
   if(count($ids) == 0) {
     $ids = array_keys(sumfields_get_all_participant_status_types());
   }
+  array_walk($ids, 'sumfields_force_integer');
   $str_ids = implode(',', $ids);
   $sql = str_replace('%participant_noshow_status_ids', $str_ids, $sql);
 
@@ -160,46 +213,16 @@ function sumfields_sql_rewrite($sql) {
   if(count($ids) == 0) {
     $ids = array_keys(sumfields_get_all_event_types());
   }
+  array_walk($ids, 'sumfields_force_integer');
   $str_ids = implode(',', $ids);
   $sql = str_replace('%event_type_ids', $str_ids, $sql);
 
   $fiscal_dates = sumfields_get_fiscal_dates();
   $keys = array_keys($fiscal_dates);
   $values = array_values($fiscal_dates);
+  array_walk($values, 'sumfields_force_date');
   $sql = str_replace($keys, $values, $sql);
-
-  $participant_info_table_name = sumfields_get_participant_info_table();
-  if($participant_info_table_name) {
-    $sql = str_replace('%civicrm_value_participant_info', $participant_info_table_name, $sql);
-  }
-  elseif(preg_match('/%civicrm_value_participant_info/', $sql)) {
-    // This is an error - we have a variable we can't replace.
-    return FALSE;
-  }
-  $reminder_response_field = sumfields_get_column_name('reminder_response');
-  if($reminder_response_field) {
-    $sql = str_replace('%reminder_response', $reminder_response_field, $sql);
-  }
-  elseif(preg_match('/%reminder_response/', $sql)) {
-    // This is an error - we have a variable we can't replace.
-    return FALSE;
-  }
-  $invitation_response_field = sumfields_get_column_name('invitation_response');
-  if($invitation_response_field) {
-    $sql = str_replace('%invitation_response', $invitation_response_field, $sql);
-  }
-  elseif(preg_match('/%invitation_response/', $sql)) {
-    // This is an error - we have a variable we can't replace.
-    return FALSE;
-  }
-  $event_attended_total_lifetime_field = sumfields_get_column_name('event_attended_total_lifetime');
-  if($event_attended_total_lifetime_field) {
-    $sql = str_replace('%event_attended_total_lifetime', $event_attended_total_lifetime_field, $sql);
-  }
-  elseif(preg_match('/%event_attended_total_lifetime/', $sql)) {
-    // This is an error - we have a variable we can't replace.
-    return FALSE;
-  }
+  
   return $sql;
 }
 
@@ -269,84 +292,119 @@ function sumfields_zero_pad($num) {
  **/
 
 function sumfields_civicrm_triggerInfo(&$info, $tableName) {
-  // Our triggers all use custom fields. CiviCRM, when generating
-  // custom fields, sometimes gives them different names (appending
-  // the id in most cases) to avoid name collisions.
-  //
-  // So, we have to retrieve the actual name of each field that is in
-  // use.
+  
+  // Do a check if we are running through triggers or cronjob. We don't want
+  // use system resources
+  $data_update_method = sumfields_get_setting('data_update_method','default');  
+  if ($data_update_method == 'via_triggers') {  
+  
+    // Our triggers all use custom fields. CiviCRM, when generating
+    // custom fields, sometimes gives them different names (appending
+    // the id in most cases) to avoid name collisions.
+    //
+    // So, we have to retrieve the actual name of each field that is in
+    // use.
 
-  $table_name = _sumfields_get_custom_table_name();
-  $custom_fields = _sumfields_get_custom_field_parameters();
+    $table_name = _sumfields_get_custom_table_name();
+    $custom_fields = _sumfields_get_custom_field_parameters();
 
-  // Load the field and group definitions because we need the trigger
-  // clause that is stored here.
-  $custom = sumfields_get_custom_field_definitions();
+    // Load the field and group definitions because we need the trigger
+    // clause that is stored here.
+    $custom = sumfields_get_custom_field_definitions();
 
-  // We create a trigger sql statement for each table that should
-  // have a trigger
-  $tables = array();
-  $generic_sql = "INSERT INTO `$table_name` SET ";
-  $sql_field_parts = array();
+    // We create a trigger sql statement for each table that should
+    // have a trigger
+    $tables = array();
+    
+    $generic_sql = "INSERT INTO `$table_name` SET ";
+    $sql_field_parts = array();
 
-  $active_fields = sumfields_get_setting('active_fields', array());
+    $active_fields = sumfields_get_setting('active_fields', array());
+    $session = CRM_Core_Session::singleton();
 
-  $session = CRM_Core_Session::singleton();
-
-  // Iterate over all our fields, and build out a sql parts array
-  while(list($base_column_name, $params) = each($custom_fields)) {
-    if(!in_array($base_column_name, $active_fields)) continue;
-    $table = $custom['fields'][$base_column_name]['trigger_table'];
-    if(!is_null($tableName) && $tableName != $table) {
-      // if triggerInfo is called with particular table name, we should
-      // only respond if we are contributing triggers to that table.
-      continue;
+    // Iterate over all our fields, and build out a sql parts array
+    foreach($custom_fields as $base_column_name => $params) {
+      if(!in_array($base_column_name, $active_fields)) continue;
+      $table = $custom['fields'][$base_column_name]['trigger_table'];
+      if(!is_null($tableName) && $tableName != $table) {
+        // if triggerInfo is called with particular table name, we should
+        // only respond if we are contributing triggers to that table.
+        continue;
+      }
+      $trigger = $custom['fields'][$base_column_name]['trigger_sql'];
+      $trigger = sumfields_sql_rewrite($trigger);
+      // If we fail to properly rewrite the sql, don't set the trigger
+      // to avoid sql exceptions.
+      if(FALSE === $trigger) {
+        $msg = sprintf(E::ts("Failed to rewrite sql for %s field."), $base_column_name);
+        $session->setStatus($msg);
+        continue;
+      }
+      $sql_field_parts[$table][] = '`' . $params['column_name'] . '` = ' .
+        $trigger;
+      // Keep track of which tables we need to build triggers for.
+      if(!in_array($table, $tables)) $tables[] = $table;
     }
-    $trigger = $custom['fields'][$base_column_name]['trigger_sql'];
-    $trigger = sumfields_sql_rewrite($trigger);
-    // If we fail to properly rewrite the sql, don't set the trigger
-    // to avoid sql exceptions.
-    if(FALSE === $trigger) {
-      $msg = sprintf(ts("Failed to rewrite sql for %s field."), $base_column_name);
-      $session->setStatus($msg);
-      continue;
+
+    // Iterate over each table that needs a trigger, build the trigger's
+    // sql clause.
+    foreach ($tables as $table) {
+      // Most tables don't need to be enclosed in an if/then statement,
+      // so pre_sql and post_sql are null.
+      $pre_sql = NULL;
+      $post_sql = NULL;
+
+      $parts = $sql_field_parts[$table];
+
+      // Most trigger tables have the contact_id field so calculating the
+      // contact_id is as easy as referencing NEW.contact_id. However,
+      // some trigger tables (e.g. civicrm_line_item) don't have contact_id
+      // so triggers based on these tables have to calculate the value of
+      // the contact_id (e.g. (SELECT contact_id FROM civicrm_contribution
+      // WHERE id = NEW.contribution_id)). How it is calculated varies
+      // depending on the table. This code abstracts that process - so you
+      // simply need to add it to custom.php.
+      if (isset($custom['tables'][$table]['calculated_contact_id'])) {
+        $calculated_contact_id = $custom['tables'][$table]['calculated_contact_id'];
+
+        // Wrap this trigger around an if/then to ensure we only execute if we
+        // can calculate the contact_id.
+        $pre_sql = " IF $calculated_contact_id IS NOT NULL\nTHEN\n";
+        $post_sql = " END IF;";
+      }
+      else {
+        // Choose the default.
+        $calculated_contact_id = 'NEW.contact_id';
+      }
+
+      $parts[] = "entity_id = $calculated_contact_id";
+
+      $extra_sql = implode(',', $parts);
+      $sql = $pre_sql . $generic_sql . $extra_sql . ' ON DUPLICATE KEY UPDATE ' . $extra_sql . ';' . $post_sql;
+
+      // We want to fire this trigger on insert, update and delete.
+      $info[] = array(
+        'table' => $table,
+        'when' => 'AFTER',
+        'event' => 'INSERT',
+        'sql' => $sql,
+       );
+      $info[] = array(
+        'table' => $table,
+        'when' => 'AFTER',
+        'event' => 'UPDATE',
+        'sql' => $sql,
+      );
+      // For delete, we reference OLD.field instead of NEW.field
+      $sql = str_replace('NEW.', 'OLD.', $sql);
+      $info[] = array(
+        'table' => $table,
+        'when' => 'AFTER',
+        'event' => 'DELETE',
+        'sql' => $sql,
+      );
     }
-    $sql_field_parts[$table][] = '`' . $params['column_name'] . '` = ' .
-      $trigger;
-    // Keep track of which tables we need to build triggers for.
-    if(!in_array($table, $tables)) $tables[] = $table;
-  }
 
-  // Iterate over each table that needs a trigger, build the trigger's
-  // sql clause.
-  foreach ($tables as $table) {
-    $parts = $sql_field_parts[$table];
-    $parts[] = 'entity_id = NEW.contact_id';
-
-    $extra_sql = implode(',', $parts);
-    $sql = $generic_sql . $extra_sql . ' ON DUPLICATE KEY UPDATE ' . $extra_sql . ';';
-
-    // We want to fire this trigger on insert, update and delete.
-    $info[] = array(
-      'table' => $table,
-      'when' => 'AFTER',
-      'event' => 'INSERT',
-      'sql' => $sql,
-     );
-    $info[] = array(
-      'table' => $table,
-      'when' => 'AFTER',
-      'event' => 'UPDATE',
-      'sql' => $sql,
-    );
-    // For delete, we reference OLD.field instead of NEW.field
-    $sql = str_replace('NEW.', 'OLD.', $sql);
-    $info[] = array(
-      'table' => $table,
-      'when' => 'AFTER',
-      'event' => 'DELETE',
-      'sql' => $sql,
-    );
   }
 }
 
@@ -356,7 +414,6 @@ function sumfields_civicrm_triggerInfo(&$info, $tableName) {
  * data after changing fields, etc.
  */
 function sumfields_create_temporary_table($trigger_table) {
-  $name = CRM_Core_DAO::createTempTableName();
 
   // These are the actual field names as created in this instance
   $custom_fields = _sumfields_get_custom_field_parameters();
@@ -390,10 +447,9 @@ function sumfields_create_temporary_table($trigger_table) {
       }
     }
   }
-  $sql = "CREATE TEMPORARY TABLE `$name` ( ".
-    implode($create_fields, ',') . ')';
-  CRM_Core_DAO::executeQuery($sql);
-  return $name;
+  return CRM_Utils_SQL_TempTable::build()->createWithColumns(
+    implode($create_fields, ',')
+  )->getName();
 }
 
 /**
@@ -416,9 +472,14 @@ function sumfields_generate_data_based_on_current_data($session = NULL) {
     $session = CRM_Core_Session::singleton();
   }
   if(empty($table_name)) {
-    $session::setStatus(ts("Your configuration may be corrupted. Please disable and renable this extension."), ts('Error'), 'error');
+    $session::setStatus(E::ts("Your configuration may be corrupted. Please disable and renable this extension."), E::ts('Error'), 'error');
     return FALSE;
   }
+
+  // If database logging is on, turn it off during summary fields calculation.
+  // disableLoggingForThisConnection() checks the config for logging
+  CRM_Logging_Schema::disableLoggingForThisConnection();
+
   // In theory we shouldn't have to truncate the table, but we
   // are doing it just to be sure it's empty.
   $sql = "TRUNCATE TABLE `$table_name`";
@@ -438,17 +499,30 @@ function sumfields_generate_data_based_on_current_data($session = NULL) {
       continue;
     }
     $table = $custom['fields'][$base_column_name]['trigger_table'];
+    if (isset($custom['tables'][$table]['trigger_field'])) {
+      $trigger_field = $custom['tables'][$table]['trigger_field'];
+    }
+    else {
+      // Use the default.
+      $trigger_field = 'contact_id';
+    }
 
     $trigger = $custom['fields'][$base_column_name]['trigger_sql'];
-    // We replace NEW.contact_id with t2.contact_id to reflect the difference
+    // We replace NEW.contact_id with trigger_table.contact_id (or a custom field
+    // if the trigger table does not have contact_id) to reflect the difference
     // between the trigger sql statement and the initial sql statement
     // to load the data.
-    $trigger = str_replace('NEW.contact_id', 't2.contact_id', $trigger);
+    $trigger = str_replace('NEW.' . $trigger_field, 'trigger_table.' . $trigger_field, $trigger);
     if (FALSE === $trigger = sumfields_sql_rewrite($trigger)) {
-      $msg = sprintf(ts("Failed to rewrite sql for %s field."), $base_column_name);
+      $msg = sprintf(E::ts("Failed to rewrite sql for %s field."), $base_column_name);
       $session->setStatus($msg);
       continue;
     }
+    // Avoid failures if sql_mode is set to ONLY_FULL_GROUP_BY
+    // If we wrap the SELECT field in MAX, then we avoid the error.
+    // Since the SELECT will only return one value anyway, adding
+    // MAX should not change the value.
+    $trigger = 'MAX(' . $trigger . ')';
     if (!isset($temp_sql[$table])) {
       $temp_sql[$table] = array(
         'temp_table' => sumfields_create_temporary_table($table),
@@ -458,13 +532,30 @@ function sumfields_generate_data_based_on_current_data($session = NULL) {
     }
     $temp_sql[$table]['triggers'][$base_column_name] = $trigger;
     $temp_sql[$table]['map'][$base_column_name] = $params['column_name'];
+    // If we have not yet set the initialize_join value for this table
+    // then set it here.
+    if (!isset($temp_sql[$table]['initialize_join'])) {
+      // Check custom.php for a custom value. This is only necessary
+      // if the trigger table does not have a contact_id field.
+      if (isset($custom['tables'][$table]['initialize_join'])) {
+        // Overwrite with custom value. Since we have to group by contact_id,
+        // this option allow us to add a join table with contact_id in it
+        // in case our trigger table does not have a contact_id.
+        $temp_sql[$table]['initialize_join'] = $custom['tables'][$table]['initialize_join'];
+      }
+      else {
+        // $temp_sql[$table]['initialize_join'] = "JOIN civicrm_contact AS c ON trigger_table.contact_id = c.id ";
+        $temp_sql[$table]['initialize_join'] = NULL;
+      }
+    }
+
   }
 
   if(empty($temp_sql)) {
     // Is this an error? Not sure. But it will be an error if we let this
     // function continue - it will produce a broken sql statement, so we
     // short circuit here.
-    $session::setStatus(ts("Not regenerating content, no fields defined."), ts('Error'), 'error');
+    $session::setStatus(E::ts("Not regenerating content, no fields defined."), E::ts('Error'), 'error');
     return TRUE;
   }
 
@@ -472,9 +563,10 @@ function sumfields_generate_data_based_on_current_data($session = NULL) {
     // Calculate data and insert into temp table
     $query = "INSERT INTO `{$data['temp_table']}` SELECT contact_id, "
       . implode(",\n", $data['triggers'])
-      . " FROM `$table` AS t2 "
-      . "JOIN civicrm_contact AS c ON t2.contact_id = c.id ";
-    $query .= ' GROUP BY contact_id';
+      . " FROM `$table` AS trigger_table "
+      . $data['initialize_join'] 
+      . ' GROUP BY contact_id';
+
     CRM_Core_DAO::executeQuery($query);
 
     // Move temp data into custom field table
@@ -564,7 +656,7 @@ function sumfields_create_custom_fields_and_table() {
 
     $result = civicrm_api('CustomField', 'create', $params);
     if($result['is_error'] == 1) {
-      CRM_Core_Session::setStatus(print_r($result, TRUE), ts("Error creating custom field '%1'", array(1 => $name)), 'error');
+      CRM_Core_Session::setStatus(print_r($result, TRUE), E::ts("Error creating custom field '%1'", array(1 => $name)), 'error');
       continue;
     }
     $value = array_pop($result['values']);
@@ -582,13 +674,7 @@ function sumfields_create_custom_fields_and_table() {
  * for this extension.
  **/
 function sumfields_save_setting($key, $value) {
-  if (version_compare('>=', CRM_Utils_System::version(), '4.7.alpha1')) {
-    civicrm_api3('Setting', 'create', array($key => $value));
-  }
-  else {
-    $group = 'Summary Fields';
-    CRM_Core_BAO_Setting::setItem($value, $group, $key);
-  }
+ civicrm_api3('Setting', 'create', array($key => $value));
 }
 
 /**
@@ -605,6 +691,36 @@ function sumfields_get_setting($key, $default = NULL) {
   }
   if(empty($ret)) return $default;
   return $ret;
+}
+/**
+ * Renable the custom field group
+ *
+ */
+function sumfields_reenable_custom_group() {
+  // If we are enabled after having been disabled, see if we have an
+  // existing custom group that should be re-enabled.
+  $custom_table_parameters = _sumfields_get_custom_table_parameters();
+  $id = $custom_table_parameters['id'];
+  if ($id) {
+    $params = array('id' => $id);
+    $result = civicrm_api3('CustomGroup', 'getsingle', $params);
+    $result['is_active'] = 1;
+    civicrm_api3('CustomGroup', 'create', $result);
+  }
+}
+/**
+ * Disable the custom field group
+ *
+ */
+function sumfields_disable_custom_group() {
+  $custom_table_parameters = _sumfields_get_custom_table_parameters();
+  $id = $custom_table_parameters['id'];
+  if ($id) {
+    $params = array('id' => $id);
+    $result = civicrm_api3('CustomGroup', 'getsingle', $params);
+    $result['is_active'] = 0;
+    civicrm_api3('CustomGroup', 'create', $result);
+  }
 }
 
 /**
@@ -629,17 +745,19 @@ function sumfields_delete_custom_fields_and_table() {
     $result = civicrm_api('CustomField', 'delete', $params);
     if($result['is_error'] == 1) {
       $column_name = $field['column_name'];
-      $session->setStatus(sprintf(ts("Error deleting '%s'"), $column_name));
+      $session->setStatus(E::ts("Error deleting '%1'", array(1 => $column_name)));
       $session->setStatus(print_r($result,TRUE));
     }
   }
   $custom_table_parameters = _sumfields_get_custom_table_parameters();
   $id = $custom_table_parameters['id'];
-  $params = array('version' => 3, 'id' => $id);
-  $result = civicrm_api('CustomGroup', 'delete', $params);
-  if($result['is_error'] == 1) {
-    $table_name = $custom_table_parameters['table_name'];
-    $session->setStatus(sprintf(ts("Error deleting '%s'"), $table_name));
+  if ($id) {
+    $params = array('version' => 3, 'id' => $id);
+    $result = civicrm_api('CustomGroup', 'delete', $params);
+    if($result['is_error'] == 1) {
+      $table_name = $custom_table_parameters ['table_name'];
+      $session->setStatus(E::ts("Error deleting '%1'", array(1 => $table_name)));
+    }
   }
 }
 
@@ -647,7 +765,7 @@ function sumfields_delete_custom_fields_and_table() {
  * Remove our values from civicrm_setting table
  **/
 function sumfields_delete_user_settings() {
-  $settings = require_once('settings/sumfields.settings.php');
+  $settings = require_once('settings/sumfields.setting.php');
   $sql = "DELETE FROM civicrm_setting WHERE name = %0";
   while(list($key) = each($settings)) {
     // No remove/delete for Setting api entity.
@@ -684,7 +802,8 @@ function _sumfields_get_custom_field_parameters() {
  *
  **/
 function _sumfields_get_custom_table_parameters() {
-  return sumfields_get_setting('custom_table_parameters', array());
+  $default = array('table_name' => NULL, 'id' => NULL);
+  return sumfields_get_setting('custom_table_parameters', $default);
 }
 
 /**
@@ -721,33 +840,9 @@ function sumfields_get_custom_field_definitions() {
           unset($custom['fields'][$k]);
         }
       }
-      if ($k == 'event_turnout_attempts') {
-        // event_turnout_attempts is triggered on the civicrm_participant table,
-        // but it counts records in the civicrm custom table civirm_participant_info_NN.
-        // We have to look up the name of that table for this particular instance as a
-        // way to see if the table is installed.
-        $actual_table_name = sumfields_get_participant_info_table();
-        if (!$actual_table_name) {
-          // Perhaps not enabled.
-          unset($custom['fields'][$k]);
-        }
-      }
     }
   }
   return $custom;
-}
-
-/**
- * Helper function: get name of civicrm_value_participant_info table
- * for this installation or FALSE if it's not enabled.
- **/
-function sumfields_get_participant_info_table() {
-  $sql = "SELECT table_name FROM civicrm_custom_group WHERE name = 'participant_info';";
-  $dao = CRM_Core_DAO::executeQuery($sql);
-  if($dao->N == 0) return FALSE;
-
-  $dao->fetch();
-  return $dao->table_name;
 }
 
 /**
@@ -915,7 +1010,7 @@ function sumfields_find_incorrect_total_lifetime_contribution_records() {
 
   // Rewrite the sql with the appropriate variables filled in.
   if(FALSE === $trigger_sql = sumfields_sql_rewrite($config_trigger_sql)) {
-    $msg = sprintf(ts("Failed to rewrite sql for %s field."), $base_column_name);
+    $msg = E::ts("Failed to rewrite sql for %1 field.", array(1 => $base_column_name));
     drush_log($msg, 'error');
     return FALSE;
   }
@@ -1115,13 +1210,13 @@ function sumfields_alter_table() {
         }
       }
       catch (CiviCRM_API3_Exception $e) {
-        $session->setStatus(sprintf(ts("Error deleting custom field '%s': %s"), $field, $e->getMessage()));
+        $session->setStatus(E::ts("Error deleting custom field '%1': %2"), array(1 => $field, 2 => $e->getMessage()));
         // This will result in a error, but let's continue anyway to see if we can get the rest of the fields
         // in working order.
         $ret = FALSE;
         continue;
       }
-      // $session->setStatus(sprintf(ts("Deleted custom field '%s'"), $field));
+      // $session->setStatus(E::ts("Deleted custom field '%1'"), array(1 => $field));
       unset($custom_field_parameters[$field]);
     }
   }
@@ -1129,7 +1224,7 @@ function sumfields_alter_table() {
   // Add new fields
   $custom_table_parameters = sumfields_get_setting('custom_table_parameters', NULL);
   if(is_null($custom_table_parameters)) {
-    $session->setStatus(ts("Failed to get the custom group parameters. Can't add new fields."));
+    $session->setStatus(E::ts("Failed to get the custom group parameters. Can't add new fields."));
     return FALSE;
   }
   $custom = sumfields_get_custom_field_definitions();
@@ -1147,11 +1242,11 @@ function sumfields_alter_table() {
         }
       }
       catch (CiviCRM_API3_Exception $e) {
-        $session->setStatus(sprintf(ts("Error adding custom field '%s': %s"), $field, $e->getMessage()));
+        $session->setStatus(E::ts("Error adding custom field '%1': %2"), array(1 => $field, 2 => $e->getMessage()));
         $ret = FALSE;
         continue;
       }
-      // $session->setStatus(sprintf(ts("Added custom field '%s'"), $field));
+      // $session->setStatus(E::ts("Added custom field '%1'"), array(1 => $field));
       $value = array_pop($result['values']);
       $custom_field_parameters[$field] = array(
         'id' => $value['id'],
@@ -1238,6 +1333,8 @@ function sumfields_gen_data(&$returnValues) {
     // Check to see if the new_active_fields setting is set. This means we have to alter the fields
     // from the current setting.
     $new_active_fields = sumfields_get_setting('new_active_fields', NULL);
+    // Get process type
+    $data_update_method = sumfields_get_setting('data_update_method','via_triggers');
     if(!is_null($new_active_fields)) {
       if(!sumfields_alter_table()) {
         // If we fail to properly alter the table, bail and record that we had an error.
@@ -1255,7 +1352,12 @@ function sumfields_gen_data(&$returnValues) {
       if(sumfields_generate_data_based_on_current_data()) {
         CRM_Core_DAO::triggerRebuild();
         $date = date('Y-m-d H:i:s');
-        $new_status = 'success:' . $date;
+        if ($data_update_method == 'via_cron') {
+          // If we have big data, then after a successful task, re-set the status to scheduled
+          $new_status = 'scheduled:' . $date;
+        } else {
+          $new_status = 'success:' . $date;
+        }
       }
       else {
         $date = date('Y-m-d H:i:s');
